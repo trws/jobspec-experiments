@@ -1,0 +1,15 @@
+type: Cluster
+name: Hype
+with>:
+    type: Node
+    names: hype[201-354]
+    with>:
+        type: Socket
+        count: 2
+        with:
+            - type: Core
+              count: 8
+            - type: Memory
+              count: 15000
+              unit: MB
+

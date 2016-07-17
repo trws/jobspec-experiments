@@ -1,0 +1,18 @@
+type: Node
+name: bolt
+with:
+    type: Socket
+    with:
+      - type: Core
+        count: 8
+        with: Lane[4]
+      - type: GPU-int
+        with: Core[4]>Lane[16]
+      - type: GPU
+        with:
+            type: SMX
+            count: 4
+            with: Core[8]>Lane[16]
+
+
+
