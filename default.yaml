@@ -1,0 +1,45 @@
+%TAG ! tag:flux-framework.github.io,2015:
+--- #!job
+# each document is a job, which contains a list of programs
+default-task: &def-task
+      command: flux-broker
+      range: 1
+      range-type: per-shard #could also be total or others later
+      affinity: bind
+default-resource: &def-res #!resource
+  - range: 1
+    name: PU # Smallest allocatable unit
+    allocate: exclusive #default when not specified is shared, innermost exclusive
+    tasks: 
+        - *def-task
+default-program: &def-prog
+    resources: # !program
+        - <<: *def-shard
+programs: #to support re-use, lists of lists are implicitly flattened
+  - <<: *def-prog
+
+
+---
+# Minimum example
+Node
+# Identified as a string scalar, parsed as a short-form resource literal,
+# substitues in place of the default-resource, results in this document:
+---
+programs:
+    - resources:
+          - range: 1
+            name: PU # Smallest allocatable unit
+            allocate: exclusive #default when not specified is shared, innermost exclusive
+      tasks:
+          command: flux-broker
+          range: 1
+          range-type: per-shard #could also be total or others later
+          affinity: bind
+
+---
+
+#!shard
+ntype: shard
+range: 10
+resources: Node>Core[4]
+

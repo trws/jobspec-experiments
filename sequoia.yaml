@@ -1,0 +1,12 @@
+type: Cluster
+name: Sequoia
+with>:
+    type: Rack
+    count: 20
+    with>:
+        type: Node
+        count: 1024
+        with>:
+            - type: Core
+              count: 16
+
