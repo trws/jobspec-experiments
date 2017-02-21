@@ -1,5 +1,40 @@
-type: Node
-with:
-  - type: Core
-    count: 4
+# - id: slot_id
+#   type: slot
+#   count: 1
+#   slot_id: stuff
+#   with:
+#     - type: Node
+#       count: 5
+#       with:
+#         - type: Core
+#           count: 
+#               min: 4
+# - type: Node
+#   with:
+#     - type: Core
+#     count: [4:15]
+#       with:
+#         - type: task
+#           command: do_stuff
+#           count_per_slot: 16
+#           
+# - type: task
+#   command: do_stuff
+#   slot: slot_id
+#
+#
+#
+#
+# ---
+
+- type: slot
+  count: 1
+  with:
+    - type: Node
+      count: 5
+- type: Task
+  count: 20
+
+# ---
+#
 

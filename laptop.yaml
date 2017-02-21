@@ -6,13 +6,13 @@ with:
       - type: Core
         count: 8
         with: Lane[4]
-      - type: GPU-int
-        with: Core[4]>Lane[16]
+      - type: GPU_int
+        with: gpu_Core[4]>Lane[16]
       - type: GPU
         with:
             type: SMX
             count: 4
-            with: Core[8]>Lane[16]
+            with: gpu_Core[8]>Lane[16]
 
 
 

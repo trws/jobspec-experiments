@@ -135,14 +135,17 @@ def link_name(res):
     if res.direction == 'in':
         return '<' + ret
     if res.direction == 'out':
-        return ret + '>'
+        if ret == 'with':
+            return 'with'
+        else:
+            return ret + '>'
     if res.direction == 'inout':
         return '<' + ret + '>'
 
 def process_sub_resource(s, ret, res):
-    if ret.get('with>', None) is None:
-        ret['with>'] = []
-    ret['with>'].append(canonicalize_inner(s, res))
+    if ret.get('with', None) is None:
+        ret['with'] = []
+    ret['with'].append(canonicalize_inner(s, res))
 
 def process_attribute(s, ret, a):
     if a == 'task' or a.attr_type == 'task':

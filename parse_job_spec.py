@@ -23,13 +23,47 @@ import cmd
 
 # drawing
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
-# import graph_tool as gt
+import graph_tool as gt
+import graph_tool.draw as gt_draw
 
-# hash of graphs by edge type
-graphs = {}
-# Hash of node lists by node type
-node_lists = {}
+NodeType = collections.namedtuple('NodeType', ['type','instances'])
+EdgeType = collections.namedtuple('EdgeType', ['type','instances'])
+# Task = collections.namedtuple('Program', ['type', 'command', 'walltime'])
+# Resource = collections.namedtuple('Resource', ['type', 'pool', 'units'])
+
+types = {
+        'program' : NodeType('program', []),
+        }
+
+def add_with_type(g, t):
+    v = g.add_vertex()
+    # print t
+    if types.get(t, None) is None:
+        types[t] = NodeType(t, [])
+    tgt = types[t]
+    g.vp.type[v] = tgt.type
+    g.vp.data[v] = {}
+    g.vp.label[v] = t + '-' + str(len(tgt.instances))
+    tgt.instances.append(v)
+    return v
+
+def add_edge_type(g, f, to, t='with'):
+    # print f
+    e = g.add_edge(f, to)
+    if types.get(t, None) is None:
+        types[t] = EdgeType(t, [])
+    tgt = types[t]
+    g.ep.type[e] = tgt.type
+    tgt.instances.append(e)
+    return e
+
+def add_typed_and_attach(g, t, parent, edge_type='with'):
+    v = add_with_type(g, t)
+    add_edge_type(g, parent, v, edge_type)
+    return v
+
 
 # leave room for root
 next_id = 1
@@ -44,11 +78,8 @@ def get_id():
 
 
 def get_node_type(node):
-    if node.get('ftype', False):
-        return node['ftype']
-
     # Need to work it out
-    t = node.get('type', None)
+    t = node.get('ftype', None)
     if t is None:
         if node.get('task', False):
             t = 'slot'
@@ -88,19 +119,23 @@ def canonicalize_inner(node, node_type=None):
             ret['resources'] = canonicalize_inner(
                 node['resources'], node_type='resource')
         elif t in ('resource', 'slot'):
-            for name in ('with>', 'name', 'type', 'tasks'):
+            for name in ('with', 'name', 'type', 'tasks'):
                 if node.get(name, False):
-                    if name in ('with>', 'with'):
+                    if name in ('with', 'with'):
                         ret[name] = canonicalize_inner(node[name], 'resource')
                     elif name == 'tasks':
                         ret[name] = canonicalize_inner(node[name], 'task')
+                    elif name == 'type':
+                        ret[name] = node[name].lower()
                     else:
                         ret[name] = canonicalize_inner(node[name])
 
             for k in node:
-                if k in ('with>', 'name', 'type', 'count'):
+                if k in ('with', 'name', 'type', 'count'):
                     continue
                 ret[k] = node[k]
+            if  ret.get('executable', None) is None:
+                ret['executable'] = ret['type'].lower() in ('core', 'node', 'pu')
         if node.get('count', False):
             rng = node['count']
             if not isinstance(rng, str):
@@ -129,44 +164,48 @@ def parse(spec):
         ret.append((canonicalize_inner(c), c))
     return ret if len(ret) > 1 else ret[0]
 
-Program = collections.namedtuple('Program', ['type'])
-Task = collections.namedtuple('Program', ['type', 'command', 'walltime'])
-Resource = collections.namedtuple('Resource', ['type', 'pool', 'units'])
 
 
 def add_resource(g, r, node, parent):
-    g.add_node(node['id'], **node)
-    g.add_edge(parent['id'], node['id'])
-    for sublist in ('with>', 'with'):
-        sl = r.get(sublist, None)
-        if sl is not None:
-            add_level_to_graph(g, sl, node)
-
-    add_tasks_to_graph(g, r.get('tasks', ()), node)
+    vtx = add_typed_and_attach(g, node['type'], parent)
+    if node['type'] == 'task':
+        print "adding task"
+        g.vp.data[vtx]['command'] = node.get('command', ['flux', 'start'])
+        connect_task(g, node, vtx)
+    else:
+        g.vp.pool[vtx] = node['pool']
+        g.vp.unit[vtx] = node['unit']
+        g.vp.slot_id[vtx] = node.get('slot_id', "")
+        g.vp.executable[vtx] = node.get('executable', False)
+        print node
+        print g.vp.executable[vtx], node.get('executable', 15)
+    sl = r.get('with', None)
+    if sl is not None:
+        add_level_to_graph(g, sl, vtx)
 
 
 def add_resources_to_graph(g, r, t, parent):
     # print r
     if isinstance(r, str):
-        node = {'id': get_id(),
-                'type': t}
         r = prs.parse_resource_string(r)
         # print "parsed:", r
         if isinstance(r, str):
-            node['type'] = r
-            g.add_node(node['id'], **node)
-            g.add_edge(parent['id'], node['id'])
+            add_typed_and_attach(g, r, parent)
         else:
             add_resources_to_graph(g, r, t, parent)
     elif type(r) in (list, set, tuple):
         for sr in r:
             add_resources_to_graph(g, sr, t, parent)
     elif isinstance(r, dict):
-        # node.tags = set(r.get('tags', ()))
         t = r.get('type', t)
+        # vtx = add_typed_and_attach(g, t, parent)
+        # g.vp.unit[vtx] = r.get('unit', 'units')
+        # g.vp.pool[vtx] = r.get('unit', 'units') != 'units'
+        # node.tags = set(r.get('tags', ()))
         node = {'id': get_id(),
                 'type': t,
-                'unit': r.get('unit', 'units')}
+                'unit': r.get('unit', 'units'),
+                'executable':r.get('executable', False)}
         node['pool'] = r.get('unit', 'units') != 'units'
         r_min = 0
         r_max = 1
@@ -238,6 +277,23 @@ def add_tasks_to_graph(g, t, parent):
 
     return
 
+def connect_task(graph, task, task_vtx):
+    target = task.get('slot_id', False)
+    if target:
+        for v in graph.vertices():
+            if graph.vp.slot_id[v] == target:
+                add_edge_type(graph, task_vtx, v, 'slot')
+            else:
+                raise RuntimeError("no matching slot-id found")
+    else:
+        # print 'deriving task slot'
+        executable = gt.GraphView(graph, vfilt=graph.vp.executable)
+        # print executable
+        e_leaves = gt.GraphView(executable, vfilt=lambda v: v.in_degree() == 1 and v.out_degree() == 0)
+        # print e_leaves
+        for v in e_leaves.vertices():
+            add_edge_type(graph, task_vtx, v, 'slot')
+
 
 def add_level_to_graph(g, n, parent, query=False):
     # print n
@@ -246,22 +302,20 @@ def add_level_to_graph(g, n, parent, query=False):
     except AttributeError:
         t = 'Group'
     if t == 'program':
-        p = {'type': 'program',
-             'id': get_id()}
-        p['walltime'] = n.get('walltime', '1h')
-        g.add_node(p['id'], **p)
-        g.add_edge(parent['id'], p['id'])
+        p = add_with_type(g, 'program')
+        g.vp.data[p]['walltime'] = n.get('walltime', '1h')
+        add_edge_type(g, parent, p)
         try:
             for r in n['resources']:
                 add_level_to_graph(g, r, p)
         except:
             pass
     elif t == 'task':
-        p = {'type': 'task',
-             'id': get_id()}
-        p['command'] = n.get('command', None)
-        g.add_node(p['id'], **p)
-        g.add_edge(parent['id'], p['id'])
+        print "adding task"
+        p = add_with_type(g, 'task')
+        g.vp.data[p]['command'] = n.get('command', ['flux', 'start'])
+        add_edge_type(g, parent, p)
+        connect_task(g, n, p)
     else:
         add_resources_to_graph(g, n, t, parent)
     # else:
@@ -269,10 +323,20 @@ def add_level_to_graph(g, n, parent, query=False):
 
 
 def to_resource_graph(tree):
-    g = nx.DiGraph()
-    root = {'id': 0,
-            'type': 'root'}
-    g.add_node(0, type='root')
+    g = gt.Graph()
+    g.ep.type = g.new_ep("string")
+    g.vp.type = g.new_vp("string")
+    g.vp.type = g.new_vp("string")
+    g.ep.data = g.new_ep("object")
+    g.vp.data = g.new_vp("object")
+    g.vp.count_min = g.new_vp("int")
+    g.vp.count_max = g.new_vp("int")
+    g.vp.unit = g.new_vp("string")
+    g.vp.label = g.new_vp("string")
+    g.vp.pool = g.new_vp("bool")
+    g.vp.slot_id = g.new_vp("string")
+    g.vp.executable = g.new_vp("bool")
+    root = add_with_type(g, 'root')
     add_level_to_graph(g, tree, root)
     return g
 
@@ -281,18 +345,6 @@ def print_res(n, s):
     print '-' * 20, n, '-' * 20
     print '-' * 20, 'size=', len(s), '-' * 20
     print s
-
-def connect_successors(g):
-    stack = [0]
-    for n, pred in nx.dfs_predecessors(g,0).items():
-        if stack[-1] != pred:
-            stack.pop()
-        for p in stack:
-            if p not in g.in_edges_iter((n,)):
-                # print "adding edge", p, n
-                g.add_edge(p, n)
-        stack.append(n)
-    return g
 
 def flatten(root):
     nodes = []
@@ -341,8 +393,9 @@ class Interactive(cmd.Cmd):
         """
         with open(yaml_path) as f:
             self.canonical = canonicalize(f)
+            # print self.canonical
+            # sys.exit(1)
         self.graph = to_resource_graph(self.canonical)
-        self.graph = connect_successors(self.graph)
 
         print "Successfully loaded", yaml_path
 
@@ -351,8 +404,38 @@ class Interactive(cmd.Cmd):
         return completions
 
     def do_draw(self, line):
-        nx.draw_networkx(self.graph)
-        plt.show()
+        g = self.graph
+
+        spectral = plt.get_cmap('spectral')
+        n_levels = len(types)
+        val = 0.0
+        step = 1.0 / n_levels
+        colors = {}
+        for k in types.keys():
+            colors[k] = spectral(val)
+            val += step
+        g.vp.v_colors = g.new_vp('vector<float>')
+        for v in g.vertices():
+            g.vp.v_colors[v] = colors[g.vp.type[v]]
+
+        if line:
+            gt_draw.graph_draw(self.graph,
+                               pos=gt_draw.arf_layout(g),
+                               output_size=(2400,2400),
+                               vertex_text=g.vp.type,
+                               vertex_fill_color=g.vp.v_colors,
+                               vertex_size=10,
+                               output=line)
+        else:
+            gt_draw.interactive_window(self.graph,
+                                       vertex_fill_color=g.vp.v_colors,
+                                       vertex_size=10,
+                                       display_props=[g.vp.type,
+                                                      g.vp.data,
+                                                      g.vp.pool,
+                                                      g.vp.unit ])
+        # nx.draw_networkx(self.graph)
+        # plt.show()
         # completions = glob.glob(text + '*')
         # return completions
 
@@ -363,43 +446,42 @@ class Interactive(cmd.Cmd):
         """
         args = line.split()
         if 'graphml' == args[0]:
-            nx.write_graphml(self.graph, args[1] if len(
-                args) > 1 else './meh.graphml')
+            self.graph.save(args[1] if len( args) > 1 else './meh.graphml')
             return
-        # prepare for use with d3
-        gt = json_graph.tree_data(self.graph, 0)
-        (nodes, links) = flatten(gt)
-        gj = {'directed': True,
-              'links': links,
-              'nodes': nodes,
-              'multigraph': True,
-              'tree': gt,
-              }
-        # print gt
-        # gj['edges'] = gj['links']
-        for v in gj['links']:
-            v['id'] = get_id()
-            # v['target'] = gj['nodes'][v['target']]['id']
-            # v['source'] = gj['nodes'][v['source']]['id']
-            v['to'] = v['target']
-            v['from'] = v['source']
-        for v in gj['nodes']:
-            v['size'] = 1
-            v['r'] = 10
-            v['x'] = 1
-            v['y'] = 1
-            v['label'] = v.get('Name', v['type'])
-            # v['depth'] = nx.shortest_path_length(g, '0', v['id']) + 1
-        if len(args) > 1:
-            f = open(args[1], 'w')
-        else:
-            f = sys.stdout
-        if len(args) == 0 or args[0] == 'yaml':
-            print >> f, yaml.dump(gj, indent=4)
-        elif args[0] == 'json':
-            print >> f, json.dumps(gj, indent=4)
-        else:
-            raise "crud"
+        # prepare for use with d3 TODO: needs to be fixed after GT conversion
+        # gt = json_graph.tree_data(self.graph, 0)
+        # (nodes, links) = flatten(gt)
+        # gj = {'directed': True,
+        #       'links': links,
+        #       'nodes': nodes,
+        #       'multigraph': True,
+        #       'tree': gt,
+        #       }
+        # # print gt
+        # # gj['edges'] = gj['links']
+        # for v in gj['links']:
+        #     v['id'] = get_id()
+        #     # v['target'] = gj['nodes'][v['target']]['id']
+        #     # v['source'] = gj['nodes'][v['source']]['id']
+        #     v['to'] = v['target']
+        #     v['from'] = v['source']
+        # for v in gj['nodes']:
+        #     v['size'] = 1
+        #     v['r'] = 10
+        #     v['x'] = 1
+        #     v['y'] = 1
+        #     v['label'] = v.get('Name', v['type'])
+        #     # v['depth'] = nx.shortest_path_length(g, '0', v['id']) + 1
+        # if len(args) > 1:
+        #     f = open(args[1], 'w')
+        # else:
+        #     f = sys.stdout
+        # if len(args) == 0 or args[0] == 'yaml':
+        #     print >> f, yaml.dump(gj, indent=4)
+        # elif args[0] == 'json':
+        #     print >> f, json.dumps(gj, indent=4)
+        # else:
+        #     raise "crud"
 
     def do_export_canonical(self, path):
         """
@@ -411,11 +493,12 @@ class Interactive(cmd.Cmd):
         else:
             f = sys.stdout
 
+        print
         print >> f, yaml.dump(self.canonical)
 
     def do_query(self, line):
         with open(line) as f:
-            print query(self.graph, to_resource_graph(canonicalize(f)))
+            print query(self.graph, canonicalize(f))
 
     def do_EOF(self, line):
         return True
